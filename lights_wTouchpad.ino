@@ -12,30 +12,45 @@ int led = 13;
 #define RGB_GREEN 5
 #define RGB_BLUE 6
 
+#define TOUCH_RED   10
+#define TOUCH_GREEN 11
+#define TOUCH_BLUE  12
+
 #define EEPROM_START_ADDR 0xC0
 
 /* Used to store the key state */
-byte Key;
-byte lastReadScroll = 0;
 
 int writeToEepromFlag = 0;
 int restoreFromEepromFlag = 0;
 
-int doorSwitch = 0;
-byte switchFadeTimer = 0;
+short display_flags = 0;
+#define DOOR_SW 1
+#define CTRL_ON 2
+
+byte switchFadeTimer = 100;
 
 int savedRed = 0;
 int savedGreen = 0;
 int savedBlue = 0;
 int liveRed, liveGreen, liveBlue;
 
+//-----------------commands--------------------
+#define NO_OP      0
+#define INC_RED    1
+#define INC_GREEN  2
+#define INC_BLUE   4
+#define OP_SAVE    15
+#define OP_RESTORE 5
+#define OP_TOGGLE  7
+#define OP_ABORT   255
+
 /*-------------------------Set Leds----------------------------------*/
 
-void setRgbLeds(int rIn, int gIn, int bIn)
+void setRgbLeds()
 {
-  analogWrite(RGB_RED, rIn);
-  analogWrite(RGB_GREEN, gIn);
-  analogWrite(RGB_BLUE, bIn);
+  analogWrite(RGB_RED, liveRed & 0xff);
+  analogWrite(RGB_GREEN, liveGreen & 0xff);
+  analogWrite(RGB_BLUE, liveBlue & 0xff);
 }
 
 void setRgbLedsOff()
@@ -48,7 +63,7 @@ void setRgbLedsSaved()
   liveRed = savedRed;
   liveGreen = savedGreen;
   liveBlue = savedBlue;
-  setRgbLeds(savedRed, savedGreen, savedBlue);
+ // setRgbLeds(savedRed, savedGreen, savedBlue);
 }
 
 /*---------------------Read EEPROM------------------------*/
@@ -139,9 +154,13 @@ void setup()
   pinMode(RGB_GREEN,OUTPUT); 
   pinMode(RGB_BLUE,OUTPUT); 
 
+  pinMode(TOUCH_RED,  INPUT);
+  pinMode(TOUCH_GREEN,INPUT);
+  pinMode(TOUCH_BLUE, INPUT);
+  
   getRgbEeprom();
 
-  //dumpEeprom();
+
 }
 
 /*-----------------------Dump EEPROM------------------------*/
@@ -153,159 +172,126 @@ void dumpEeprom()
   }
 }
 
-int determineLongPress(byte input)
-{
-  static int button1Counter = 0, button5Counter = 0;
-  if(input == 1){
-    button1Counter++;
-  }
-  if(input == 5){
-    button5Counter++;
-  }
-  if(input == 0)
-  {
-    if(++button1Counter >= 4) 
-    {
-      button1Counter = 0;
-      return 1;
-    }
-    if(++button5Counter >= 4)
-    {
-      button5Counter = 0;
-      return 5;
-    }
-    button1Counter = 0;
-    button5Counter = 0;
-  }
-  return 0;
-}
-
-#define incrementValue 0x1f
-
-void processResult(byte input){
-  static int onFlag = 0;
-  static int Flag1 = 0, Flag5 = 0; /*flag indicates if button was pressed last time around to detect short press if now clear*/
-  int dummy;
-  switch(input){
-    case 0: dummy = determineLongPress(input);
-            if(dummy == 1){
-              writeToEepromFlag = 1;
-              savedRed = liveRed;    /*store them before saving them*/
-              savedGreen = liveGreen;
-              savedBlue = liveBlue;
-              Flag1 = 0;
-            }else if(dummy == 5){
-              restoreFromEepromFlag = 1;
-              Flag5 = 0;
-            }else{
-              if(Flag1) {
-                Flag1 = 0;
-                Serial.println("Short press on 1 detected");
-                if(onFlag) break;
-                liveRed = savedRed;       //switch on
-                liveGreen = savedGreen;
-                liveBlue = savedBlue;
-                onFlag = 1;
-              }
-              if(Flag5){
-                Flag5 = 0;
-                savedRed = liveRed;   //switch off
-                savedGreen = liveGreen;
-                savedBlue = liveBlue;
-                onFlag = 0;
-                Serial.println("Short press on 5 detected");
-              }
-            }
-            break;
-    case 1: dummy = determineLongPress(input);
-            if(dummy == 0) Flag1 = 1;
-            break;
-    case 2: liveRed += incrementValue;
-            if(liveRed > 0xff) liveRed = 0xff;
-            break;
-    case 3: liveGreen += incrementValue;        
-            if(liveGreen > 0xff) liveGreen = 0xff;
-            break;
-    case 4: liveBlue += incrementValue;
-            if(liveBlue > 0xff) liveBlue = 0xff;
-            break;
-    case 5: dummy = determineLongPress(input);
-            if(dummy == 0) Flag5 = 1;
-            break;
-    case 6: liveRed -= incrementValue;
-            if(liveRed < 0x00) liveRed = 0x00;
-            break;
-    case 7: liveGreen -= incrementValue;
-            if(liveGreen < 0x00) liveGreen = 0x00;
-            break;
-    case 8: liveBlue -= incrementValue;
-            if(liveBlue < 0x00) liveBlue = 0x00;
-            break;
-    default: liveRed = liveRed;//do nothing
-  }
-  if(onFlag | doorSwitch | (switchFadeTimer != 0)){
-    if(doorSwitch) switchFadeTimer = 50;
-    else if(switchFadeTimer != 0) switchFadeTimer--;
-    setRgbLeds(liveRed,liveGreen,liveBlue);
-  }else{
-    setRgbLedsOff();
-  }
-}
+#define incrementValue 0x20
 
 /* Main program */
 void loop()
 {
   /* Read the current state of the keypad */
   byte lastReadKey;
-  Key = Read_Keypad();
+  byte Key = Read_Keypad();
 
   doorSwitch = (~digitalRead(DOOR_SW_PIN)) & 0x1; //invert, floats to 12V when light off, 0v when on
+  //change to set flag in display_flags
+//include fade timer and such somehow
   
-  /* If a key has been pressed output it to the serial port */
-  processResult(Key);
-  if (Key){
-    Serial.println(Key);
-    lastReadScroll = Key; 
-    digitalWrite(led, HIGH);
-     
+  switch(Key){
+    case INC_RED:   liveRed += incrementValue;
+                    break;
+    case INC_GREEN: liveGreen += incrementValue;
+                    break;
+    case INC_BLUE:  liveBlue += incrementValue;
+                    break;
+    case OP_SAVE: savedRed   = liveRed;
+                  savedGreen = liveGreen;
+                  saveBlue   = liveBlue;
+                  setRgbEeprom();
+                  break;
+    case OP_RESTORE: setRgbLedsSaved();
+                     break;
+    case OP_TOGGLE: if((display_flags & CTRL_ON) == CTRL_ON) display_flags &= ~CTRL_ON;
+                    else                                     display_flags |= CTRL_ON;
+                    break;
+    case NO_OP:
+    default: break; //do nothing
   }
-  else {
-    lastReadScroll = 0;
-    digitalWrite(led, LOW);
+
+  if((display_flags & DOOR_SW) == DOOR_SW){
+    setRgbLeds();
   }
-  checkEepromFlags();
-/*  if (lastReadKey != Key){
-    setRgbLed(Key);
-    lastReadKey = Key;
-  }*/
-  /* Wait a little before reading again 
-     so not to flood the serial port*/
+  else{
+    if((display_flags & CTRL_ON) == CTRL_ON){
+      setRgbLeds();
+      //do timer stuff to ensure it doesn't stay on forever
+    }
+  }
+  
   delay(100);
 }
 
+#define PRESS_HOLD 5
+#define LONG_PRESS 10
 
 /* Read the state of the keypad */
 byte Read_Keypad(void)
 {
-  byte Count;
-  byte Key_State = 0;
-  byte touch = 0;
+  static byte last_press = 0;
+  static short press_count = PRESS_HOLD;
+  byte this_press = 0;
 
-  /* Pulse the clock pin 16 times (one for each key of the keypad) 
-     and read the state of the data pin on each pulse */
-  for(Count = 1; Count <= 8; Count++)
-  {
-    digitalWrite(SCL_PIN, LOW); 
-    
-    /* If the data pin is low (active low mode) then store the 
-       current key number */
-    if (!digitalRead(SDO_PIN)){
-      Key_State = Count;
-      touch++;}
-    
-    digitalWrite(SCL_PIN, HIGH);
+  if(digitalRead(TOUCH_RED  )) this_press |= INC_RED;
+  if(digitalRead(TOUCH_GREEN)) this_press |= INC_GREEN;
+  if(digitalRead(TOUCH_BLUE )) this_press |= INC_BLUE;
 
-  }  
-  
-  return Key_State; 
+  if(this_press == 0){
+    press_count = PRESS_HOLD;
+    if((last_press < 5)||(last_press == OP_ABORT)) { //allow abort or last command to clear
+      last_press = 0;
+      return 0;
+    }
+     if(press_count > 0){
+     this_press = last_press; /*assuming this is OP_TOGGLE*/
+     last_press = 0; /*return that value */
+     return this_press;
+    }
+  }
+  if(this_press < 5){
+    if(last_press == 0){
+      press_count = PRESS_HOLD; /*first touch of button, return the colour*/
+      last_press = this_press;
+      return this_press;
+    }
+    if(last_press != this_press){
+      last_press = OP_ABORT; /*another button has been pressed too, wait for release*/
+      return 0;
+    }
+    press_count--;
+    if(press_count == 0){ /*or we've counted down, so increment colour by returning that value*/
+      press_count = PRESS_HOLD;
+      return this_press;
+    }
+  }
+  if(this_press == OP_RESTORE){
+    if(last_press == 0){
+      last_press = this_press;
+      press_count = PRESS_HOLD;
+      return 0;
+    }
+    if(last_press != this_press){
+      last_press = OP_ABORT; /*another button has been pressed too, wait for release*/
+      return 0;
+    }
+    press_count--;
+    if(press_count == 0){
+      last_press = OP_ABORT; /*timer cleared so send restore command*/
+      return OP_RESTORE;
+    }else{
+      return 0;
+    }
+  }
+  if(this_press == OP_TOGGLE){
+    if(last_press == 0){
+      press_count = LONG_PRESS;
+      return 0;
+    }
+    if(last_press != this_press){
+      last_press = OP_ABORT; /*another button has been pressed too, wait for release*/
+      return 0;
+    }
+    press_count--;
+    if(press_count == 0){
+      last_press = OP_ABORT; /*code will save and flash twice*/
+      return OP_SAVE;
+    }
+  }
 }
