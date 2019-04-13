@@ -23,9 +23,9 @@ int led = 13;
 int writeToEepromFlag = 0;
 int restoreFromEepromFlag = 0;
 
-short display_flags = 0;
 #define DOOR_SW 1
 #define CTRL_ON 2
+short display_flags = CTRL_ON;
 
 byte switchFadeTimer = 100;
 
@@ -55,7 +55,9 @@ void setRgbLeds()
 
 void setRgbLedsOff()
 {
-  setRgbLeds(0,0,0);
+  analogWrite(RGB_RED, 0);
+  analogWrite(RGB_GREEN, 0);
+  analogWrite(RGB_BLUE, 0);
 }
 
 void setRgbLedsSaved()
@@ -95,8 +97,11 @@ void getRgbEeprom()
     savedRed   = r;
     savedGreen = g;
     savedBlue  = b;
-    if(doorSwitch) setRgbLedsSaved();
-    Serial.println("Colours found in EEPROM");    
+    //if(doorSwitch) setRgbLedsSaved();
+    Serial.println("Colours found in EEPROM");
+    Serial.println(r,DEC);    
+    Serial.println(g,DEC);    
+    Serial.println(b,DEC);    
   }else{
     savedRed   = 0;
     savedGreen = 0;
@@ -116,29 +121,12 @@ void setRgbEeprom(){
   colours[4] = (byte)savedBlue;
   colours[5] = (byte)(0xff - savedBlue);
 
-  for(int y = 0; y < 6; y++)
+ /* for(int y = 0; y < 6; y++)
   {
     EEPROM[y+EEPROM_START_ADDR] = colours[y];
-  }
+  }*/
 
   Serial.println("Saved to EEPROM");
-}
-
-/*------------------------Flag checking------------------------*/
-void checkEepromFlags()
-{
-   if(writeToEepromFlag){
-    Serial.println("Long press on 1 detected"); /* now you just need to write a write to EEPROM function here */
-    setRgbEeprom();
-    writeToEepromFlag = 0;
-   }
-
-   if(restoreFromEepromFlag){
-    Serial.println("Long press on 5 detected");
-    restoreFromEepromFlag = 0;
-    getRgbEeprom();
-    setRgbLedsSaved();
-   }
 }
 
 /*------------------Setup-------------------------------*/
@@ -179,7 +167,10 @@ void loop()
 {
   /* Read the current state of the keypad */
   byte lastReadKey;
+  byte doorSwitch;
   byte Key = Read_Keypad();
+  static byte flash_strip = 0;
+  if(Key != 0) Serial.println(Key);
 
   doorSwitch = (~digitalRead(DOOR_SW_PIN)) & 0x1; //invert, floats to 12V when light off, 0v when on
   //change to set flag in display_flags
@@ -187,15 +178,22 @@ void loop()
   
   switch(Key){
     case INC_RED:   liveRed += incrementValue;
+                    Serial.println("Red: ");
+                    Serial.println(liveRed,DEC);
                     break;
     case INC_GREEN: liveGreen += incrementValue;
+                    Serial.println("Green: ");
+                    Serial.println(liveGreen,DEC);
                     break;
     case INC_BLUE:  liveBlue += incrementValue;
+                    Serial.println("Blue: ");
+                    Serial.println(liveBlue,DEC);
                     break;
     case OP_SAVE: savedRed   = liveRed;
                   savedGreen = liveGreen;
-                  saveBlue   = liveBlue;
+                  savedBlue   = liveBlue;
                   setRgbEeprom();
+                  flash_strip = 2;
                   break;
     case OP_RESTORE: setRgbLedsSaved();
                      break;
@@ -206,20 +204,32 @@ void loop()
     default: break; //do nothing
   }
 
-  if((display_flags & DOOR_SW) == DOOR_SW){
+  if(flash_strip != 0){
+    Serial.println("Flash strip:");
+    Serial.print(flash_strip,DEC);
+    switch(flash_strip){
+      case 3: setRgbLedsOff();
+              break;
+      case 2: setRgbLeds();
+              break;
+      case 1: setRgbLedsOff();
+              break;
+    }
+    flash_strip--;
+  }else if((display_flags & DOOR_SW) == DOOR_SW){
     setRgbLeds();
   }
-  else{
-    if((display_flags & CTRL_ON) == CTRL_ON){
+  else if((display_flags & CTRL_ON) == CTRL_ON){
       setRgbLeds();
       //do timer stuff to ensure it doesn't stay on forever
-    }
+  }else{
+    setRgbLedsOff();
   }
   
   delay(100);
 }
 
-#define PRESS_HOLD 5
+#define PRESS_HOLD 4
 #define LONG_PRESS 10
 
 /* Read the state of the keypad */
@@ -234,7 +244,6 @@ byte Read_Keypad(void)
   if(digitalRead(TOUCH_BLUE )) this_press |= INC_BLUE;
 
   if(this_press == 0){
-    press_count = PRESS_HOLD;
     if((last_press < 5)||(last_press == OP_ABORT)) { //allow abort or last command to clear
       last_press = 0;
       return 0;
@@ -246,15 +255,15 @@ byte Read_Keypad(void)
     }
   }
   if(this_press < 5){
-    if(last_press == 0){
+    if((last_press == 0)||(last_press != this_press)){
       press_count = PRESS_HOLD; /*first touch of button, return the colour*/
       last_press = this_press;
-      return this_press;
-    }
-    if(last_press != this_press){
-      last_press = OP_ABORT; /*another button has been pressed too, wait for release*/
       return 0;
     }
+    /*if(last_press != this_press){
+      last_press = OP_ABORT; //another button has been pressed too, wait for release
+      return 0;
+    }*/
     press_count--;
     if(press_count == 0){ /*or we've counted down, so increment colour by returning that value*/
       press_count = PRESS_HOLD;
@@ -262,15 +271,15 @@ byte Read_Keypad(void)
     }
   }
   if(this_press == OP_RESTORE){
-    if(last_press == 0){
+    if((last_press == 0)||(last_press != this_press)){
       last_press = this_press;
       press_count = PRESS_HOLD;
       return 0;
     }
-    if(last_press != this_press){
-      last_press = OP_ABORT; /*another button has been pressed too, wait for release*/
+    /*if(last_press != this_press){
+      last_press = OP_ABORT; //another button has been pressed too, wait for release
       return 0;
-    }
+    }*/
     press_count--;
     if(press_count == 0){
       last_press = OP_ABORT; /*timer cleared so send restore command*/
@@ -280,18 +289,20 @@ byte Read_Keypad(void)
     }
   }
   if(this_press == OP_TOGGLE){
-    if(last_press == 0){
+    if((last_press == 0)||(last_press != this_press)){
+      last_press = this_press;
       press_count = LONG_PRESS;
       return 0;
     }
-    if(last_press != this_press){
-      last_press = OP_ABORT; /*another button has been pressed too, wait for release*/
+    /*if(last_press != this_press){
+      last_press = OP_ABORT; //another button has been pressed too, wait for release
       return 0;
-    }
+    }*/
     press_count--;
     if(press_count == 0){
       last_press = OP_ABORT; /*code will save and flash twice*/
       return OP_SAVE;
     }
   }
+  return 0;
 }
