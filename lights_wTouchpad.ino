@@ -25,11 +25,10 @@ int restoreFromEepromFlag = 0;
 #define FLASH_LEDS 4
 #define FADE_ON    8
 #define FADE_OFF   16
-short display_flags = CTRL_ON;
+#define UPDATE     0x80
+short display_flags = 0;
 short display_fade = 0;
 short display_flash = 0;
-
-byte switchFadeTimer = 100;
 
 int savedRed = 0;
 int savedGreen = 0;
@@ -50,9 +49,19 @@ int liveRed, liveGreen, liveBlue;
 
 void setRgbLeds(byte f)
 {
-  analogWrite(RGB_RED, liveRed & f);
-  analogWrite(RGB_GREEN, liveGreen & f);
-  analogWrite(RGB_BLUE, liveBlue & f);
+  int rr,gg,bb;
+  if(f == 0xff){
+    analogWrite(RGB_RED, liveRed);
+    analogWrite(RGB_GREEN, liveGreen);
+    analogWrite(RGB_BLUE, liveBlue);
+  }else{
+    rr = (liveRed * f) >> 8;
+    gg = (liveGreen * f) >> 8;
+    bb = (liveBlue * f) >> 8;
+    analogWrite(RGB_RED, rr & 0xff);
+    analogWrite(RGB_GREEN, gg & 0xff);
+    analogWrite(RGB_BLUE, bb & 0xff);
+  }
 }
 
 void setRgbLedsOff()
@@ -110,6 +119,7 @@ void getRgbEeprom()
     savedBlue  = 0;     
     Serial.println("Data in EEPROM invalid");
   }
+  setRgbLedsSaved(); //on start-up load from eeprom
 }
 
 /*------------------------Write EEPROM-------------------------*/
@@ -123,10 +133,10 @@ void setRgbEeprom(){
   colours[4] = (byte)savedBlue;
   colours[5] = (byte)(0xff - savedBlue);
 
- /* for(int y = 0; y < 6; y++)
+  for(int y = 0; y < 6; y++)
   {
     EEPROM[y+EEPROM_START_ADDR] = colours[y];
-  }*/
+  }
 
   Serial.println("Saved to EEPROM");
 }
@@ -146,6 +156,8 @@ void setup()
   pinMode(TOUCH_RED,  INPUT);
   pinMode(TOUCH_GREEN,INPUT);
   pinMode(TOUCH_BLUE, INPUT);
+
+  pinMode(DOOR_SW_PIN,INPUT);
   
   getRgbEeprom();
 
@@ -164,40 +176,55 @@ void dumpEeprom()
 /*---------------Control led display------------------------*/
 
 void control_leds(){
+  if((display_flags & UPDATE) == 0) return; //only change pwm values if there is a reason to. Time changing modes do not update this
+
   if((display_flags & FLASH_LEDS) == FLASH_LEDS){ //highest priority
-    if(display_flash == 0) display_flash = 45;
+    if(display_flash == 0) display_flash = 12;
     display_flash--;
-    if(display_flash > 30) setRgbLedsOff();
-    if(display_flash > 15) setRgbLeds(0xff);
-    if(display_flash >  0) setRgbLedsOff();
-    if(display_flash == 0) display_flags &= ~FLASH_LEDS;
-     
+    if(display_flash > 8) {
+      setRgbLedsOff();
+    }else if(display_flash > 4) {
+      setRgbLeds(0xff);
+    }else if(display_flash >  0) {
+      setRgbLedsOff();
+    }else if(display_flash <= 0) {
+      display_flags &= ~FLASH_LEDS;
+      display_flash = 0;
+    }
+   return;  
   }
   if((display_flags & CTRL_ON) == CTRL_ON){
     setRgbLeds(0xff);
+    display_flags &= ~UPDATE;
+    return;
   }
   if((display_flags & FADE_ON) == FADE_ON){
     if(display_fade == 0xff) display_fade = 0x00; //chances are this will not happen
-    display_fade += 4;
+    display_fade += 16;
     if(display_fade > 0xff) {
       display_fade = 0xff;
       display_flags &= ~FADE_ON;
     }
     setRgbLeds(display_fade);
+    return;
   }
   if((display_flags & FADE_OFF) == FADE_OFF){
     if(display_fade == 0) display_fade = 0xff;
-    display_fade -= 4;
+    display_fade -= 16;
     if(display_fade < 0) {
       display_fade = 0;
       display_flags &= ~FADE_OFF;
     }
     setRgbLeds(display_fade);
+    return;
   }
   if((display_flags & DOOR_SW) == DOOR_SW){
     setRgbLeds(0xff);
+    display_flags &= ~UPDATE;
+    return;
   }
 
+  display_flags &= ~UPDATE;
   setRgbLedsOff();
   return;                                         //lowest priority
 }
@@ -211,8 +238,12 @@ void loop()
   byte lastReadKey;
   byte doorSwitch;
   byte Key = Read_Keypad();
-  static byte flash_strip = 0;
-  if(Key != 0) Serial.println(Key);
+  
+  if(Key != 0){
+    Serial.println("Key:");
+    Serial.println(Key);
+    display_flags |= UPDATE;
+  }
 
   doorSwitch = (~digitalRead(DOOR_SW_PIN)) & 0x1; //invert, floats to 12V when light off, 0v when on
   //change to set flag in display_flags
@@ -231,9 +262,9 @@ void loop()
                     Serial.println("Blue: ");
                     Serial.println(liveBlue,DEC);
                     break;
-    case OP_SAVE: savedRed   = liveRed;
-                  savedGreen = liveGreen;
-                  savedBlue   = liveBlue;
+    case OP_SAVE: savedRed   = (byte)liveRed;
+                  savedGreen = (byte)liveGreen;
+                  savedBlue  = (byte)liveBlue;
                   setRgbEeprom();
                   display_flags |= FLASH_LEDS; //let the display routine clear this
                   break;
@@ -246,22 +277,29 @@ void loop()
     default: break; //do nothing
   }
 
+  
+  if(Key != 0) {
+    Serial.println("Flags:");
+    Serial.println(display_flags);
+  }
+  
   if(doorSwitch) {
     if((display_flags & DOOR_SW) == 0) display_flags |= FADE_ON;    //on now, was off then initiate fade on
     display_flags |= DOOR_SW;
+    display_flags |= UPDATE;
   }else{
     if((display_flags & DOOR_SW) == DOOR_SW) display_flags |= FADE_OFF; //off now was on then fade off
     display_flags &= ~DOOR_SW;
+    display_flags |= UPDATE;
   }
   
   
-  for(int j = 0; j < 4; j++){
-    control_leds();
-    delay(20);
-  }
+  control_leds();
+  delay(80);
+  
 }
 
-#define PRESS_HOLD 4
+#define PRESS_HOLD 3
 #define LONG_PRESS 10
 
 /* Read the state of the keypad */
