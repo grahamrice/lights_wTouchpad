@@ -2,16 +2,13 @@
 
 int led = 13;
 
-/* Define the digital pins used for the clock and data */
-#define SCL_PIN 8
-#define SDO_PIN 9
-
 #define DOOR_SW_PIN 2
 
 #define RGB_RED 3
 #define RGB_GREEN 5
 #define RGB_BLUE 6
 
+#define TOUCH_CTRL   8
 #define TOUCH_RED   10
 #define TOUCH_GREEN 11
 #define TOUCH_BLUE  12
@@ -23,9 +20,14 @@ int led = 13;
 int writeToEepromFlag = 0;
 int restoreFromEepromFlag = 0;
 
-#define DOOR_SW 1
-#define CTRL_ON 2
+#define DOOR_SW    1
+#define CTRL_ON    2
+#define FLASH_LEDS 4
+#define FADE_ON    8
+#define FADE_OFF   16
 short display_flags = CTRL_ON;
+short display_fade = 0;
+short display_flash = 0;
 
 byte switchFadeTimer = 100;
 
@@ -39,18 +41,18 @@ int liveRed, liveGreen, liveBlue;
 #define INC_RED    1
 #define INC_GREEN  2
 #define INC_BLUE   4
+#define OP_TOGGLE  8
 #define OP_SAVE    15
 #define OP_RESTORE 5
-#define OP_TOGGLE  7
 #define OP_ABORT   255
 
 /*-------------------------Set Leds----------------------------------*/
 
-void setRgbLeds()
+void setRgbLeds(byte f)
 {
-  analogWrite(RGB_RED, liveRed & 0xff);
-  analogWrite(RGB_GREEN, liveGreen & 0xff);
-  analogWrite(RGB_BLUE, liveBlue & 0xff);
+  analogWrite(RGB_RED, liveRed & f);
+  analogWrite(RGB_GREEN, liveGreen & f);
+  analogWrite(RGB_BLUE, liveBlue & f);
 }
 
 void setRgbLedsOff()
@@ -136,12 +138,11 @@ void setup()
   Serial.begin(115200);
   /* Configure the clock and data pins */
   pinMode(led, OUTPUT);
-  pinMode(SCL_PIN, OUTPUT);  
-  pinMode(SDO_PIN, INPUT);
   pinMode(RGB_RED,OUTPUT); 
   pinMode(RGB_GREEN,OUTPUT); 
   pinMode(RGB_BLUE,OUTPUT); 
 
+  pinMode(TOUCH_CTRL, INPUT);
   pinMode(TOUCH_RED,  INPUT);
   pinMode(TOUCH_GREEN,INPUT);
   pinMode(TOUCH_BLUE, INPUT);
@@ -160,9 +161,50 @@ void dumpEeprom()
   }
 }
 
+/*---------------Control led display------------------------*/
+
+void control_leds(){
+  if((display_flags & FLASH_LEDS) == FLASH_LEDS){ //highest priority
+    if(display_flash == 0) display_flash = 45;
+    display_flash--;
+    if(display_flash > 30) setRgbLedsOff();
+    if(display_flash > 15) setRgbLeds(0xff);
+    if(display_flash >  0) setRgbLedsOff();
+    if(display_flash == 0) display_flags &= ~FLASH_LEDS;
+     
+  }
+  if((display_flags & CTRL_ON) == CTRL_ON){
+    setRgbLeds(0xff);
+  }
+  if((display_flags & FADE_ON) == FADE_ON){
+    if(display_fade == 0xff) display_fade = 0x00; //chances are this will not happen
+    display_fade += 4;
+    if(display_fade > 0xff) {
+      display_fade = 0xff;
+      display_flags &= ~FADE_ON;
+    }
+    setRgbLeds(display_fade);
+  }
+  if((display_flags & FADE_OFF) == FADE_OFF){
+    if(display_fade == 0) display_fade = 0xff;
+    display_fade -= 4;
+    if(display_fade < 0) {
+      display_fade = 0;
+      display_flags &= ~FADE_OFF;
+    }
+    setRgbLeds(display_fade);
+  }
+  if((display_flags & DOOR_SW) == DOOR_SW){
+    setRgbLeds(0xff);
+  }
+
+  setRgbLedsOff();
+  return;                                         //lowest priority
+}
+
 #define incrementValue 0x20
 
-/* Main program */
+/*------------------ Main program --------------------------*/
 void loop()
 {
   /* Read the current state of the keypad */
@@ -193,7 +235,7 @@ void loop()
                   savedGreen = liveGreen;
                   savedBlue   = liveBlue;
                   setRgbEeprom();
-                  flash_strip = 2;
+                  display_flags |= FLASH_LEDS; //let the display routine clear this
                   break;
     case OP_RESTORE: setRgbLedsSaved();
                      break;
@@ -204,29 +246,19 @@ void loop()
     default: break; //do nothing
   }
 
-  if(flash_strip != 0){
-    Serial.println("Flash strip:");
-    Serial.print(flash_strip,DEC);
-    switch(flash_strip){
-      case 3: setRgbLedsOff();
-              break;
-      case 2: setRgbLeds();
-              break;
-      case 1: setRgbLedsOff();
-              break;
-    }
-    flash_strip--;
-  }else if((display_flags & DOOR_SW) == DOOR_SW){
-    setRgbLeds();
-  }
-  else if((display_flags & CTRL_ON) == CTRL_ON){
-      setRgbLeds();
-      //do timer stuff to ensure it doesn't stay on forever
+  if(doorSwitch) {
+    if((display_flags & DOOR_SW) == 0) display_flags |= FADE_ON;    //on now, was off then initiate fade on
+    display_flags |= DOOR_SW;
   }else{
-    setRgbLedsOff();
+    if((display_flags & DOOR_SW) == DOOR_SW) display_flags |= FADE_OFF; //off now was on then fade off
+    display_flags &= ~DOOR_SW;
   }
   
-  delay(100);
+  
+  for(int j = 0; j < 4; j++){
+    control_leds();
+    delay(20);
+  }
 }
 
 #define PRESS_HOLD 4
@@ -242,13 +274,14 @@ byte Read_Keypad(void)
   if(digitalRead(TOUCH_RED  )) this_press |= INC_RED;
   if(digitalRead(TOUCH_GREEN)) this_press |= INC_GREEN;
   if(digitalRead(TOUCH_BLUE )) this_press |= INC_BLUE;
+  if(digitalRead(TOUCH_CTRL )) this_press |= OP_TOGGLE;
 
   if(this_press == 0){
     if((last_press < 5)||(last_press == OP_ABORT)) { //allow abort or last command to clear
       last_press = 0;
       return 0;
     }
-     if(press_count > 0){
+     if((press_count > 0)&&(press_count < (LONG_PRESS - PRESS_HOLD))){
      this_press = last_press; /*assuming this is OP_TOGGLE*/
      last_press = 0; /*return that value */
      return this_press;
@@ -270,10 +303,25 @@ byte Read_Keypad(void)
       return this_press;
     }
   }
+  if(this_press == OP_TOGGLE){
+    if((last_press == 0)||(last_press != this_press)){
+      press_count = LONG_PRESS; /*first touch of button, return the colour*/
+      last_press = this_press;
+      return 0;
+    }
+    press_count--;
+    if(press_count == 0){ //if we've counted down here we will save
+      press_count = 0;
+      last_press = OP_ABORT; /*code will save and flash twice*/
+      return OP_SAVE;
+    }else{
+      return 0; //wait for release to return toggle 
+    }
+  }
   if(this_press == OP_RESTORE){
     if((last_press == 0)||(last_press != this_press)){
       last_press = this_press;
-      press_count = PRESS_HOLD;
+      press_count = LONG_PRESS;
       return 0;
     }
     /*if(last_press != this_press){
@@ -286,22 +334,6 @@ byte Read_Keypad(void)
       return OP_RESTORE;
     }else{
       return 0;
-    }
-  }
-  if(this_press == OP_TOGGLE){
-    if((last_press == 0)||(last_press != this_press)){
-      last_press = this_press;
-      press_count = LONG_PRESS;
-      return 0;
-    }
-    /*if(last_press != this_press){
-      last_press = OP_ABORT; //another button has been pressed too, wait for release
-      return 0;
-    }*/
-    press_count--;
-    if(press_count == 0){
-      last_press = OP_ABORT; /*code will save and flash twice*/
-      return OP_SAVE;
     }
   }
   return 0;
