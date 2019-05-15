@@ -2,13 +2,14 @@
 
 int led = 13;
 
-#define DOOR_SW_PIN 2
+#define DOOR_SW_PIN  2
+#define IGNITION_PIN 4
 
-#define RGB_RED 3
+#define RGB_RED 9
 #define RGB_GREEN 5
 #define RGB_BLUE 6
 
-#define TOUCH_CTRL   8
+#define TOUCH_CTRL   3
 #define TOUCH_RED   10
 #define TOUCH_GREEN 11
 #define TOUCH_BLUE  12
@@ -25,10 +26,13 @@ int restoreFromEepromFlag = 0;
 #define FLASH_LEDS 4
 #define FADE_ON    8
 #define FADE_OFF   16
+#define TIMED_OFF  0x40
 #define UPDATE     0x80
 short display_flags = 0;
 short display_fade = 0;
 short display_flash = 0;
+
+int timeout = 4000;
 
 int savedRed = 0;
 int savedGreen = 0;
@@ -158,6 +162,7 @@ void setup()
   pinMode(TOUCH_BLUE, INPUT);
 
   pinMode(DOOR_SW_PIN,INPUT);
+  /*pinMode(IGNITION_PIN,INPUT);*/
   
   getRgbEeprom();
 
@@ -176,6 +181,11 @@ void dumpEeprom()
 /*---------------Control led display------------------------*/
 
 void control_leds(){
+  if((display_flags & TIMED_OFF) == TIMED_OFF){
+    setRgbLedsOff();
+    return;
+  }
+  
   if((display_flags & UPDATE) == 0) return; //only change pwm values if there is a reason to. Time changing modes do not update this
 
   if((display_flags & FLASH_LEDS) == FLASH_LEDS){ //highest priority
@@ -237,6 +247,7 @@ void loop()
   /* Read the current state of the keypad */
   byte lastReadKey;
   byte doorSwitch;
+  byte ignition = 0;
   byte Key = Read_Keypad();
   
   if(Key != 0){
@@ -246,8 +257,7 @@ void loop()
   }
 
   doorSwitch = (~digitalRead(DOOR_SW_PIN)) & 0x1; //invert, floats to 12V when light off, 0v when on
-  //change to set flag in display_flags
-//include fade timer and such somehow
+  /*ignition   = (digitalRead(IGNITION_PIN));  don't let timer timeout if ignition is on*/
   
   switch(Key){
     case INC_RED:   liveRed += incrementValue;
@@ -292,11 +302,20 @@ void loop()
     display_flags &= ~DOOR_SW;
     display_flags |= UPDATE;
   }
-  
+
+  if((display_flags & ~(CTRL_ON | TIMED_OFF)) != 0){
+    timeout = 4000; /*if things are happening, hold the timer off*/
+    if((display_flags & TIMED_OFF) == TIMED_OFF) display_flags &= ~TIMED_OFF; /*make sure the power off flag is clear*/
+  }
+  else if(((display_flags & CTRL_ON) == CTRL_ON)&&(ignition == 0))       /* else if we're only in user-on mode*/
+    {
+      timeout--;                          /*count down*/
+      if(timeout <= 0) display_flags |= TIMED_OFF;    /* set flag to turn off*/
+    }
   
   control_leds();
   delay(80);
-  
+  /*if((display_flags & TIMED_OFF) == TIMED_OFF) sleep(); and add an interrupt for door sw and touch ctrl to turn back on*/
 }
 
 #define PRESS_HOLD 3
