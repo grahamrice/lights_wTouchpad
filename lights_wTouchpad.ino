@@ -257,7 +257,7 @@ void loop()
   }
 
   doorSwitch = (~digitalRead(DOOR_SW_PIN)) & 0x1; //invert, floats to 12V when light off, 0v when on
-  /*ignition   = (digitalRead(IGNITION_PIN));  don't let timer timeout if ignition is on*/
+  ignition   = (digitalRead(IGNITION_PIN));       /* don't let timer timeout if ignition is on*/
   
   switch(Key){
     case INC_RED:   liveRed += incrementValue;
@@ -328,10 +328,10 @@ byte Read_Keypad(void)
   static short press_count = PRESS_HOLD;
   byte this_press = 0;
 
-  if(digitalRead(TOUCH_RED  )) this_press |= INC_RED;
-  if(digitalRead(TOUCH_GREEN)) this_press |= INC_GREEN;
-  if(digitalRead(TOUCH_BLUE )) this_press |= INC_BLUE;
-  if(digitalRead(TOUCH_CTRL )) this_press |= OP_TOGGLE;
+  if(1 & ~digitalRead(TOUCH_RED  )) this_press |= INC_RED;
+  if(1 & ~digitalRead(TOUCH_GREEN)) this_press |= INC_GREEN;
+  if(1 & ~digitalRead(TOUCH_BLUE )) this_press |= INC_BLUE;
+  if(1 & ~digitalRead(TOUCH_CTRL )) this_press |= OP_TOGGLE;
 
   if(this_press == 0){
     if((last_press < 5)||(last_press == OP_ABORT)) { //allow abort or last command to clear
