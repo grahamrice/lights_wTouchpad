@@ -1,4 +1,6 @@
 #include <EEPROM.h>
+#include <avr/interrupt.h>
+#include <avr/sleep.h>
 
 int led = 13;
 
@@ -48,6 +50,24 @@ int liveRed, liveGreen, liveBlue;
 #define OP_SAVE    15
 #define OP_RESTORE 5
 #define OP_ABORT   255
+
+/*--------------Sleep and return from sleep--------------------------*/
+
+void returnfromsleep()
+{
+  sleep_disable();
+  detachInterrupt(digitalPinToInterrupt(DOOR_SW_PIN));
+  detachInterrupt(digitalPinToInterrupt(TOUCH_CTRL));
+}
+
+void sleep()
+{
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  sleep_enable();
+  attachInterrupt(digitalPinToInterrupt(DOOR_SW_PIN),returnfromsleep,LOW);
+  attachInterrupt(digitalPinToInterrupt(TOUCH_CTRL),returnfromsleep,LOW);
+  sleep_mode();
+}
 
 /*-------------------------Set Leds----------------------------------*/
 
