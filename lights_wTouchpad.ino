@@ -30,11 +30,13 @@ int restoreFromEepromFlag = 0;
 #define FADE_OFF   16
 #define TIMED_OFF  0x40
 #define UPDATE     0x80
+#define RES_TIMER  0xFD /*inverse of CTRL_ON*/
 short display_flags = 0;
 short display_fade = 0;
 short display_flash = 0;
 
-int timeout = 4000;
+#define TIMEOUT_DEF 4000
+int timeout = TIMEOUT_DEF;
 
 int savedRed = 0;
 int savedGreen = 0;
@@ -235,9 +237,10 @@ void control_leds(){
     if(display_fade > 0xff) {
       display_fade = 0xff;
       display_flags &= ~FADE_ON;
+      display_flags &= ~UPDATE; /*only turn off update on completion*/
     }
     setRgbLeds(display_fade);
-    display_flags &= ~UPDATE;
+    
     return;
   }
   if((display_flags & FADE_OFF) == FADE_OFF){
@@ -246,9 +249,10 @@ void control_leds(){
     if(display_fade < 0) {
       display_fade = 0;
       display_flags &= ~FADE_OFF;
+      display_flags &= ~UPDATE;   /*only turn off update on completion*/
     }
     setRgbLeds(display_fade);
-    display_flags &= ~UPDATE;
+    
     return;
   }
   if((display_flags & DOOR_SW) == DOOR_SW){
@@ -317,27 +321,42 @@ void loop()
   }
   
   if(doorSwitch) {
-    if((display_flags & DOOR_SW) == 0) display_flags |= FADE_ON;    //on now, was off then initiate fade on
+    if((display_flags & DOOR_SW) == 0) {
+      if((display_flags & CTRL_ON) == 0) display_flags |= FADE_ON;    //on now, was off then initiate fade on
+      display_flags |= UPDATE;
+      Serial.println(display_flags,HEX);
+      Serial.println(timeout);
+    }
     display_flags |= DOOR_SW;
-    display_flags |= UPDATE;
   }else{
-    if((display_flags & DOOR_SW) == DOOR_SW) display_flags |= FADE_OFF; //off now was on then fade off
+    if((display_flags & DOOR_SW) == DOOR_SW) {
+      if((display_flags & CTRL_ON) == 0) display_flags |= FADE_OFF; //off now was on then fade off
+      display_flags |= UPDATE;
+      Serial.println(display_flags,HEX);
+      Serial.println(timeout);
+    }
     display_flags &= ~DOOR_SW;
-    display_flags |= UPDATE;
   }
 
-  if((display_flags & ~(CTRL_ON | TIMED_OFF)) != 0){
-    timeout = 4000; /*if things are happening, hold the timer off*/
-    if((display_flags & TIMED_OFF) == TIMED_OFF) display_flags &= ~TIMED_OFF; /*make sure the power off flag is clear*/
+  if((display_flags & RES_TIMER) != 0){
+    timeout = TIMEOUT_DEF; /*if things are happening, hold the timer off*/
+     /*if((display_flags & TIMED_OFF) == TIMED_OFF) display_flags &= ~TIMED_OFF;*/ /*make sure the power off flag is clear*/
   }
   else if(((display_flags & CTRL_ON) == CTRL_ON)&&(ignition == 0))       /* else if we're only in user-on mode*/
     {
       timeout--;                          /*count down*/
-      if(timeout <= 0) display_flags |= TIMED_OFF;    /* set flag to turn off*/
+      if((timeout == 1000)||(timeout == 2000)) {
+        Serial.print("Timing out in ");
+        Serial.println(timeout);
+      }
+      if(timeout <= 0) {
+        display_flags &= ~CTRL_ON;    /* set flag to turn off*/
+        display_flags |= UPDATE;     /*update display to turn it off*/
+      }
     }
   
   control_leds();
-  delay(80);
+  delay(80);           /*timed flag not necessary as we can just turn it off at timeout. Maybe reintroduce when sleeping*/
   /*if((display_flags & TIMED_OFF) == TIMED_OFF) sleep(); and add an interrupt for door sw and touch ctrl to turn back on*/
 }
 
