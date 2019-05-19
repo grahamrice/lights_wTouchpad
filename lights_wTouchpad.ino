@@ -111,7 +111,7 @@ int getColour(int address, byte * value)
   val2 = EEPROM[address+1];
   if((0xff - val1) == val2)
   {
-    *value = val1;
+    *value = val1 & 0xf0;
     return 0;
   }else{
     *value = 0;
@@ -221,6 +221,7 @@ void control_leds(){
       display_flags &= ~FLASH_LEDS;
       display_flash = 0;
     }
+   display_flags &= ~UPDATE;
    return;  
   }
   if((display_flags & CTRL_ON) == CTRL_ON){
@@ -236,6 +237,7 @@ void control_leds(){
       display_flags &= ~FADE_ON;
     }
     setRgbLeds(display_fade);
+    display_flags &= ~UPDATE;
     return;
   }
   if((display_flags & FADE_OFF) == FADE_OFF){
@@ -246,6 +248,7 @@ void control_leds(){
       display_flags &= ~FADE_OFF;
     }
     setRgbLeds(display_fade);
+    display_flags &= ~UPDATE;
     return;
   }
   if((display_flags & DOOR_SW) == DOOR_SW){
@@ -259,7 +262,7 @@ void control_leds(){
   return;                                         //lowest priority
 }
 
-#define incrementValue 0x20
+#define incrementValue 0x10
 
 /*------------------ Main program --------------------------*/
 void loop()
@@ -310,7 +313,7 @@ void loop()
   
   if(Key != 0) {
     Serial.println("Flags:");
-    Serial.println(display_flags);
+    Serial.println(display_flags,HEX);
   }
   
   if(doorSwitch) {
