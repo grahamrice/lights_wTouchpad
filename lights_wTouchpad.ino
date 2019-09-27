@@ -7,12 +7,12 @@ int led = 13;
 #define DOOR_SW_PIN  2
 #define IGNITION_PIN 4
 
-#define RGB_RED 9
+#define RGB_RED 10 /*was 9*/
 #define RGB_GREEN 5
 #define RGB_BLUE 6
 
 #define TOUCH_CTRL   3
-#define TOUCH_RED   10
+#define TOUCH_RED   7 /* was 10 */
 #define TOUCH_GREEN 11
 #define TOUCH_BLUE  12
 
@@ -43,6 +43,14 @@ int savedGreen = 0;
 int savedBlue = 0;
 int liveRed, liveGreen, liveBlue;
 
+#define PAUSE_DEF 3
+int pause_red, pause_green, pause_blue;
+
+byte gbl_key;
+
+void periodic_display();
+#define TIMER_RESET 60536
+
 //-----------------commands--------------------
 #define NO_OP      0
 #define INC_RED    1
@@ -60,6 +68,8 @@ void returnfromsleep()
   sleep_disable();
   detachInterrupt(digitalPinToInterrupt(DOOR_SW_PIN));
   detachInterrupt(digitalPinToInterrupt(TOUCH_CTRL));
+  timeout = TIMEOUT_DEF;
+  display_flags &= ~TIMED_OFF;
 }
 
 void sleep()
@@ -71,6 +81,13 @@ void sleep()
   sleep_mode();
 }
 
+/*------------------Timed interrupt to update display----------------*/
+
+ISR(TIMER1_OVF_vect)
+{
+  TCNT1 = TIMER_RESET;
+  periodic_display(); 
+}
 /*-------------------------Set Leds----------------------------------*/
 
 void setRgbLeds(byte f)
@@ -171,6 +188,7 @@ void setRgbEeprom(){
 void setup()
 {
   /* Initialise the serial interface */
+  noInterrupts();
   Serial.begin(115200);
   /* Configure the clock and data pins */
   pinMode(led, OUTPUT);
@@ -185,10 +203,21 @@ void setup()
 
   pinMode(DOOR_SW_PIN,INPUT);
   /*pinMode(IGNITION_PIN,INPUT);*/
+
+  pause_red = PAUSE_DEF;
+  pause_green = PAUSE_DEF;
+  pause_blue = PAUSE_DEF;
   
   getRgbEeprom();
+  
+  TCCR1A = 0;
+  TCCR1B = 0;
 
-
+  TCNT1 = TIMER_RESET;      //for 80ms overflow = 5000*256/16MHz
+  TCCR1B |= (1 << CS12);    // 256 prescaler 
+  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+  
+  interrupts();
 }
 
 /*-----------------------Dump EEPROM------------------------*/
@@ -203,10 +232,10 @@ void dumpEeprom()
 /*---------------Control led display------------------------*/
 
 void control_leds(){
-  if((display_flags & TIMED_OFF) == TIMED_OFF){
+  /*if((display_flags & TIMED_OFF) == TIMED_OFF){
     setRgbLedsOff();
     return;
-  }
+  }*/
   
   if((display_flags & UPDATE) == 0) return; //only change pwm values if there is a reason to. Time changing modes do not update this
 
@@ -220,10 +249,12 @@ void control_leds(){
     }else if(display_flash >  0) {
       setRgbLedsOff();
     }else if(display_flash <= 0) {
+      setRgbLeds(0xff);
       display_flags &= ~FLASH_LEDS;
+      display_flags &= ~UPDATE;
       display_flash = 0;
     }
-   display_flags &= ~UPDATE;
+  
    return;  
   }
   if((display_flags & CTRL_ON) == CTRL_ON){
@@ -268,34 +299,46 @@ void control_leds(){
 
 #define incrementValue 0x10
 
-/*------------------ Main program --------------------------*/
-void loop()
+/* fyi this function does not determine if we will sleep or not */
+void periodic_display()
 {
-  /* Read the current state of the keypad */
-  byte lastReadKey;
   byte doorSwitch;
   byte ignition = 0;
-  byte Key = Read_Keypad();
   
-  if(Key != 0){
-    Serial.println("Key:");
-    Serial.println(Key);
-    display_flags |= UPDATE;
-  }
-
   doorSwitch = (~digitalRead(DOOR_SW_PIN)) & 0x1; //invert, floats to 12V when light off, 0v when on
   ignition   = (digitalRead(IGNITION_PIN));       /* don't let timer timeout if ignition is on*/
   
-  switch(Key){
-    case INC_RED:   liveRed += incrementValue;
+  switch(gbl_key){
+    case INC_RED:   if(liveRed < incrementValue){
+                      if(pause_red != 0) pause_red--;
+                      else liveRed += incrementValue;
+                    }else{
+                      pause_red = PAUSE_DEF;
+                      liveRed += incrementValue;
+                    }
+                    if(liveRed > 0xf8) liveRed = 0;
                     Serial.println("Red: ");
                     Serial.println(liveRed,DEC);
                     break;
-    case INC_GREEN: liveGreen += incrementValue;
+    case INC_GREEN: if(liveGreen < incrementValue){
+                      if(pause_green != 0) pause_green--;
+                      else liveGreen += incrementValue;
+                    }else{
+                      pause_green = PAUSE_DEF;
+                      liveGreen += incrementValue;
+                    }     
+                    if(liveGreen > 0xf8) liveGreen = 0;               
                     Serial.println("Green: ");
                     Serial.println(liveGreen,DEC);
                     break;
-    case INC_BLUE:  liveBlue += incrementValue;
+    case INC_BLUE:  if(liveBlue < incrementValue){
+                      if(pause_blue != 0) pause_blue--;
+                      else liveBlue += incrementValue;
+                    }else{
+                      pause_blue = PAUSE_DEF;
+                      liveBlue += incrementValue;
+                    }
+                    if(liveBlue > 0xF8) liveBlue = 0;
                     Serial.println("Blue: ");
                     Serial.println(liveBlue,DEC);
                     break;
@@ -315,7 +358,7 @@ void loop()
   }
 
   
-  if(Key != 0) {
+  if(gbl_key != 0) {
     Serial.println("Flags:");
     Serial.println(display_flags,HEX);
   }
@@ -350,14 +393,36 @@ void loop()
         Serial.println(timeout);
       }
       if(timeout <= 0) {
+        Serial.println("Going to sleep");
         display_flags &= ~CTRL_ON;    /* set flag to turn off*/
         display_flags |= UPDATE;     /*update display to turn it off*/
+        display_flags |= TIMED_OFF;
       }
     }
   
   control_leds();
+
+  
+  gbl_key = 0;
+}
+
+/*------------------ Main program --------------------------*/
+void loop()
+{
+  /* Read the current state of the keypad */
+  byte lastReadKey;
+  byte Key = Read_Keypad();
+  
+  if(Key != 0){
+    Serial.println("Key:");
+    Serial.println(Key);
+    display_flags |= UPDATE;
+  }
+
+  gbl_key |= Key;
+
   delay(80);           /*timed flag not necessary as we can just turn it off at timeout. Maybe reintroduce when sleeping*/
-  /*if((display_flags & TIMED_OFF) == TIMED_OFF) sleep(); and add an interrupt for door sw and touch ctrl to turn back on*/
+  if((display_flags & TIMED_OFF) == TIMED_OFF) sleep(); //and add an interrupt for door sw and touch ctrl to turn back on*/
 }
 
 #define PRESS_HOLD 3
