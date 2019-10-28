@@ -4,16 +4,19 @@
 
 int led = 13;
 
+#define DOORSW_USEANALOGUE
+
 #define DOOR_SW_PIN  2
+#define DOOR_SW_PIN_A A0
 #define IGNITION_PIN 4
 
-#define RGB_RED 10 /*was 9*/
+#define RGB_RED 11 /* was 9 now 11 */
 #define RGB_GREEN 5
 #define RGB_BLUE 6
 
 #define TOUCH_CTRL   3
-#define TOUCH_RED   7 /* was 10 */
-#define TOUCH_GREEN 11
+#define TOUCH_RED   10 
+#define TOUCH_GREEN  9 /* was 11 now 9*/
 #define TOUCH_BLUE  12
 
 #define EEPROM_START_ADDR 0xC0
